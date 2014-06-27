@@ -101,6 +101,8 @@ public abstract class NanoHTTPD {
      */
     private TempFileManagerFactory tempFileManagerFactory;
 
+    private ArrayList<IUploadListener> mUploadListeners;
+
     /**
      * Constructs an HTTP server on given port.
      */
@@ -116,6 +118,7 @@ public abstract class NanoHTTPD {
         this.myPort = port;
         setTempFileManagerFactory(new DefaultTempFileManagerFactory());
         setAsyncRunner(new DefaultAsyncRunner());
+        mUploadListeners = new ArrayList<IUploadListener>();
     }
 
     private static final void safeClose(Closeable closeable) {
@@ -381,6 +384,18 @@ public abstract class NanoHTTPD {
      */
     public void setTempFileManagerFactory(TempFileManagerFactory tempFileManagerFactory) {
         this.tempFileManagerFactory = tempFileManagerFactory;
+    }
+
+    public void addUploadListener(IUploadListener listener) {
+        if(!mUploadListeners.contains(listener)) {
+            mUploadListeners.add(listener);
+        }
+    }
+
+    public void removeUploadListener(IUploadListener listener) {
+        if(mUploadListeners.contains(listener)) {
+            mUploadListeners.remove(listener);
+        }
     }
 
     /**
@@ -952,12 +967,18 @@ public abstract class NanoHTTPD {
                 randomAccessFile = getTmpBucket();
 
                 long size;
+                long totalSize;
                 if (headers.containsKey("content-length")) {
                     size = Integer.parseInt(headers.get("content-length"));
                 } else if (splitbyte < rlen) {
                     size = rlen - splitbyte;
                 } else {
                     size = 0;
+                }
+                totalSize = size;
+
+                for(IUploadListener listener : mUploadListeners) {
+                    listener.onUploadStarted(totalSize);
                 }
 
                 // Now read all the body and write it to f
@@ -968,6 +989,14 @@ public abstract class NanoHTTPD {
                     if (rlen > 0) {
                         randomAccessFile.write(buf, 0, rlen);
                     }
+
+                    for(IUploadListener listener : mUploadListeners) {
+                        listener.onUploadProgress(totalSize - size);
+                    }
+                }
+
+                for(IUploadListener listener : mUploadListeners) {
+                    listener.onUploadParsing();
                 }
 
                 // Get the raw body as a byte []
@@ -1027,6 +1056,14 @@ public abstract class NanoHTTPD {
                     }
                 } else if (Method.PUT.equals(method)) {
                     files.put("content", saveTmpFile(fbuf, 0, fbuf.limit()));
+                }
+
+                for(IUploadListener listener : mUploadListeners) {
+                    if(size != 0) {
+                        listener.onUploadError();
+                    } else {
+                        listener.onUploadComplete();
+                    }
                 }
             } finally {
                 safeClose(randomAccessFile);
@@ -1143,6 +1180,9 @@ public abstract class NanoHTTPD {
                             }
                         } else {
                             if (boundarycount > bpositions.length) {
+                                for(IUploadListener listener : mUploadListeners) {
+                                    listener.onUploadError();
+                                }
                                 throw new ResponseException(Response.Status.INTERNAL_ERROR, "Error processing request");
                             }
                             int offset = stripMultipartHeaders(fbuf, bpositions[boundarycount - 2]);
@@ -1416,5 +1456,13 @@ public abstract class NanoHTTPD {
                 response.addHeader("Set-Cookie", cookie.getHTTPHeader());
             }
         }
+    }
+
+    public interface IUploadListener {
+        public void onUploadStarted(long totalSize);
+        public void onUploadProgress(long progress);
+        public void onUploadParsing();
+        public void onUploadComplete();
+        public void onUploadError();
     }
 }
