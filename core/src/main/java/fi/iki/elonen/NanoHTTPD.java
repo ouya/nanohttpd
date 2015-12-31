@@ -730,6 +730,9 @@ public abstract class NanoHTTPD {
                     }
                 }
             } catch (ResponseException re) {
+                for (IUploadListener listener : mUploadListeners) {
+                    listener.onUploadError();
+                }
                 throw re;
             } catch (Exception e) {
                 throw new ResponseException(Response.Status.INTERNAL_ERROR, e.toString());
@@ -1021,8 +1024,13 @@ public abstract class NanoHTTPD {
             RandomAccessFile randomAccessFile = null;
             try {
                 long size = getBodySize();
+                long totalSize = size;
                 ByteArrayOutputStream baos = null;
                 DataOutput request_data_output = null;
+
+                for (IUploadListener listener : mUploadListeners) {
+                    listener.onUploadStarted(totalSize);
+                }
 
                 // Store the request in memory or a file, depending on size
                 if (size < MEMORY_STORE_LIMIT) {
@@ -1041,6 +1049,14 @@ public abstract class NanoHTTPD {
                     if (this.rlen > 0) {
                         request_data_output.write(buf, 0, this.rlen);
                     }
+
+                    for (IUploadListener listener : mUploadListeners) {
+                        listener.onUploadProgress(totalSize - size);
+                    }
+                }
+
+                for (IUploadListener listener : mUploadListeners) {
+                    listener.onUploadParsing();
                 }
 
                 ByteBuffer fbuf = null;
@@ -1084,6 +1100,14 @@ public abstract class NanoHTTPD {
                     }
                 } else if (Method.PUT.equals(this.method)) {
                     files.put("content", saveTmpFile(fbuf, 0, fbuf.limit(), null));
+                }
+
+                for (IUploadListener listener : mUploadListeners) {
+                    if (size != 0) {
+                        listener.onUploadError();
+                    } else {
+                        listener.onUploadComplete();
+                    }
                 }
             } finally {
                 safeClose(randomAccessFile);
@@ -1853,6 +1877,11 @@ public abstract class NanoHTTPD {
     private TempFileManagerFactory tempFileManagerFactory;
 
     /**
+     * List of listeners interested in file upload progress.
+     */
+    private ArrayList<IUploadListener> mUploadListeners;
+
+    /**
      * Constructs an HTTP server on given port.
      */
     public NanoHTTPD(int port) {
@@ -1875,6 +1904,7 @@ public abstract class NanoHTTPD {
         this.myPort = port;
         setTempFileManagerFactory(new DefaultTempFileManagerFactory());
         setAsyncRunner(new DefaultAsyncRunner());
+        mUploadListeners = new ArrayList<IUploadListener>();
     }
 
     /**
@@ -2126,6 +2156,18 @@ public abstract class NanoHTTPD {
         this.tempFileManagerFactory = tempFileManagerFactory;
     }
 
+    public void addUploadListener(IUploadListener listener) {
+        if (!mUploadListeners.contains(listener)) {
+            mUploadListeners.add(listener);
+        }
+    }
+
+    public void removeUploadListener(IUploadListener listener) {
+        if (mUploadListeners.contains(listener)) {
+            mUploadListeners.remove(listener);
+        }
+    }
+
     /**
      * Start the server.
      * 
@@ -2193,5 +2235,18 @@ public abstract class NanoHTTPD {
 
     public final boolean wasStarted() {
         return this.myServerSocket != null && this.myThread != null;
+    }
+
+    public interface IUploadListener {
+
+        public void onUploadStarted(long totalSize);
+
+        public void onUploadProgress(long progress);
+
+        public void onUploadParsing();
+
+        public void onUploadComplete();
+
+        public void onUploadError();
     }
 }
